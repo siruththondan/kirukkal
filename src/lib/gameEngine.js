@@ -1,128 +1,150 @@
 /**
- * gameEngine.js
- * Runs ONLY on the host's browser.
- * Manages game state: rounds, timer, word selection, scoring.
- * Communicates with clients via peerManager.
+ * gameEngine.js — Host-only game state machine
+ *
+ * Runs ONLY in the host's browser tab.
+ * Communicates with clients via peerManager broadcast/sendTo.
  */
 
-import { broadcast, sendTo } from './peerManager';
-import { checkGuess, calculatePoints, generateHint } from './fuzzyMatch';
+import { broadcast, sendTo, getMyId } from './peerManager';
+import { checkGuess, calculatePoints, buildStaticHints, applyHints } from './fuzzyMatch';
 import { getRandomWords } from './words';
 
 export class GameEngine {
-  constructor(onStateUpdate) {
-    // Callback to update host's local React state
-    this.onStateUpdate = onStateUpdate;
-    this.timer = null;
-    this.hintTimer = null;
+  /**
+   * @param {function} onStateUpdate  - partial React state update for host UI
+   * @param {function} onHostWord     - (word|null, choices|null) called when host is drawer
+   * @param {function} onClearCanvas  - called to wipe host's own canvas
+   */
+  constructor(onStateUpdate, onHostWord, onClearCanvas) {
+    this.onStateUpdate  = onStateUpdate;
+    this.onHostWord     = onHostWord;
+    this.onClearCanvas  = onClearCanvas;
+    this.timer              = null;
+    this._wordChoiceTimeout = null;
 
-    // Core game state
     this.state = {
-      phase: 'lobby',       // lobby | choosing | drawing | roundEnd | gameEnd
-      players: {},          // { peerId: { id, name, score, isDrawing, hasGuessed, color } }
-      drawerQueue: [],      // ordered list of peer IDs for drawing turns
-      drawerIndex: 0,
-      round: 1,
-      maxRounds: 3,
-      drawTime: 80,
-      timeLeft: 80,
-      currentWord: null,    // full word object
-      hintChars: [],        // ['_', 'ய', '_', 'ன', 'ை'] etc
+      phase:        'lobby',
+      players:      {},      // { peerId: PlayerObj }
+      drawerQueue:  [],      // ordered peer IDs for turns
+      drawerIndex:  0,
+      round:        1,
+      maxRounds:    3,
+      drawTime:     80,
+      timeLeft:     80,
+      currentWord:  null,
+      hintChars:    [],
+      hintMeta:     null,   // { chars, revealOrder, thresholds }
       guessedPeers: new Set(),
-      messages: [],         // chat messages
-      wordChoices: [],      // 3 word options for drawer to pick
+      messages:     [],
+      wordChoices:  [],
+      category:     'all',
     };
   }
 
-  // ─── Player Management ─────────────────────────────────────────
+  // ─── Player management ────────────────────────────────────────
 
   addPlayer(peerId, name) {
-    const colors = ['#f87171','#fb923c','#fbbf24','#34d399','#60a5fa','#a78bfa','#f472b6','#94a3b8'];
-    const takenColors = Object.values(this.state.players).map(p => p.color);
-    const color = colors.find(c => !takenColors.includes(c)) || colors[Math.floor(Math.random() * colors.length)];
+    const palette = ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6','#ec4899','#14b8a6'];
+    const taken   = Object.values(this.state.players).map(p => p.color);
+    const color   = palette.find(c => !taken.includes(c)) ?? palette[Math.floor(Math.random()*palette.length)];
 
     this.state.players[peerId] = {
-      id: peerId,
-      name,
-      score: 0,
-      isDrawing: false,
-      hasGuessed: false,
-      color,
-      joinedAt: Date.now(),
+      id: peerId, name, score: 0,
+      isDrawing: false, hasGuessed: false,
+      color, joinedAt: Date.now(),
     };
 
-    // Send welcome: full state to new player
-    sendTo(peerId, { type: 'STATE', state: this.getPublicState(peerId) });
-    // Tell everyone about new player
-    this.broadcastState();
-    this.addMessage({ type: 'system', text: `${name} விளையாட்டில் சேர்ந்தார்! 🎉` });
+    // Send full current state to the new joiner (they just connected)
+    if (peerId !== getMyId()) {
+      sendTo(peerId, { type: 'STATE', state: this._publicState() });
+    }
+    this._broadcastState();
+    this._addMsg({ type:'system', text:`${name} விளையாட்டில் சேர்ந்தார்! 🎉` });
   }
 
   removePlayer(peerId) {
-    const player = this.state.players[peerId];
-    if (!player) return;
-    const name = player.name;
+    const p = this.state.players[peerId];
+    if (!p) return;
     delete this.state.players[peerId];
+    this._addMsg({ type:'system', text:`${p.name} விளையாட்டை விட்டு சென்றார்` });
 
-    this.addMessage({ type: 'system', text: `${name} விளையாட்டை விட்டு சென்றார்` });
-
-    // If drawer left, end round
-    if (player.isDrawing && this.state.phase === 'drawing') {
-      this.endRound(true);
-      return;
+    if (p.isDrawing && this.state.phase === 'drawing') {
+      this._endRound(true);
+    } else {
+      this._checkAllGuessed();
+      this._broadcastState();
     }
-
-    // Check if all remaining players guessed
-    this.checkAllGuessed();
-    this.broadcastState();
   }
 
-  // ─── Game Flow ─────────────────────────────────────────────────
+  // ─── Game flow ─────────────────────────────────────────────────
 
   startGame(settings) {
-    this.state.maxRounds = Math.max(1, Math.min(10, settings.rounds || 3));
-    this.state.drawTime = Math.max(30, Math.min(180, settings.drawTime || 80));
-    this.state.round = 1;
+    this.state.maxRounds   = Math.max(1, Math.min(10, settings.rounds   || 3));
+    this.state.drawTime    = Math.max(30, Math.min(180, settings.drawTime || 80));
+    this.state.category    = settings.category || 'all';
+    this.state.round       = 1;
     this.state.drawerIndex = 0;
     this.state.drawerQueue = Object.keys(this.state.players);
-    this.state.phase = 'drawing';
 
-    // Reset scores
     Object.values(this.state.players).forEach(p => { p.score = 0; });
 
-    this.addMessage({ type: 'system', text: '🎮 விளையாட்டு தொடங்குகிறது!' });
-    this.startRound();
+    this._addMsg({ type:'system', text:'🎮 விளையாட்டு தொடங்குகிறது!' });
+    this._startRound();
   }
 
-  startRound() {
+  _difficultyForRound() {
+    if (this.state.round === 1) return 'easy';
+    if (this.state.round === 2) return 'medium'; // easy+medium pool
+    return null; // all difficulties
+  }
+
+  _startRound() {
+    clearInterval(this.timer);
+    clearTimeout(this._wordChoiceTimeout);
+
+    const pids = Object.keys(this.state.players);
+    if (pids.length < 2) { this._endGame(); return; }
+
     // Pick drawer
-    const playerIds = this.state.drawerQueue;
-    if (playerIds.length === 0) { this.endGame(); return; }
+    const queue    = this.state.drawerQueue;
+    const drawerId = queue[this.state.drawerIndex % queue.length];
+    const drawer   = this.state.players[drawerId];
+    if (!drawer) { this.state.drawerIndex++; this._startRound(); return; }
 
-    const drawerId = playerIds[this.state.drawerIndex % playerIds.length];
-    const drawer = this.state.players[drawerId];
-    if (!drawer) { this.state.drawerIndex++; this.startRound(); return; }
-
-    // Reset per-round state
+    // Reset per-turn state
     Object.values(this.state.players).forEach(p => {
-      p.isDrawing = (p.id === drawerId);
+      p.isDrawing  = (p.id === drawerId);
       p.hasGuessed = false;
     });
     this.state.guessedPeers = new Set();
-    this.state.timeLeft = this.state.drawTime;
-    this.state.hintChars = [];
-    this.state.currentWord = null;
-    this.state.phase = 'choosing';
+    this.state.timeLeft     = this.state.drawTime;
+    this.state.hintChars    = [];
+    this.state.hintMeta     = null;
+    this.state.currentWord  = null;
+    this.state.phase        = 'choosing';
 
-    // Give drawer 3 word choices
-    const choices = getRandomWords('all', 3);
+    // Clear canvas for everyone
+    broadcast({ type:'DRAW_CLEAR' });
+    this.onClearCanvas?.();
+
+    // Pick word choices (difficulty scales by round)
+    const diff    = this._difficultyForRound();
+    const choices = getRandomWords(this.state.category, 3, diff);
     this.state.wordChoices = choices;
 
-    broadcast({ type: 'STATE', state: this.getPublicState() });
-    sendTo(drawerId, { type: 'WORD_CHOICES', choices });
-    this.addMessage({ type: 'system', text: `✏️ ${drawer.name} வரைகிறார்!` });
+    // Broadcast choosing state
+    this._broadcastState();
+    this._addMsg({ type:'system', text:`✏️ ${drawer.name} சொல்லை தேர்ந்தெடுக்கிறார்...` });
 
-    // Auto-pick if drawer doesn't choose in 15s
+    // Deliver word choices
+    if (drawerId === getMyId()) {
+      // Host is drawing — set React state directly
+      this.onHostWord?.(null, choices);
+    } else {
+      sendTo(drawerId, { type:'WORD_CHOICES', choices });
+    }
+
+    // Auto-pick after 15 s if drawer doesn't choose
     this._wordChoiceTimeout = setTimeout(() => {
       if (this.state.phase === 'choosing') {
         this.drawerPickedWord(drawerId, choices[0]);
@@ -136,207 +158,208 @@ export class GameEngine {
     if (!drawer?.isDrawing) return;
 
     clearTimeout(this._wordChoiceTimeout);
-    this.state.currentWord = word;
-    this.state.phase = 'drawing';
-    this.state.timeLeft = this.state.drawTime;
-    this.state.hintChars = [...word.tamil].map(() => '_');
 
-    // Tell all clients round started (without the word)
-    broadcast({ type: 'ROUND_START', drawerId, drawerName: drawer.name });
-    broadcast({ type: 'STATE', state: this.getPublicState() });
+    this.state.currentWord  = word;
+    this.state.phase        = 'drawing';
+    this.state.timeLeft     = this.state.drawTime;
 
-    // Start timer
-    this.startTimer();
+    // Build static hints (deterministic, same for all clients)
+    const meta = buildStaticHints(word.tamil, this.state.drawTime);
+    this.state.hintMeta  = meta;
+    this.state.hintChars = meta.chars.map(() => '_');
+
+    // Tell host their word if they are drawing
+    if (drawerId === getMyId()) {
+      this.onHostWord?.(word, null);
+    }
+
+    // Tell all clients: round started, word length, initial blank hints
+    broadcast({
+      type:       'ROUND_START',
+      drawerId,
+      drawerName: drawer.name,
+      wordLength: meta.chars.length,
+      hintChars:  this.state.hintChars,
+    });
+
+    this._broadcastState();
+    this._addMsg({ type:'system', text:`✏️ ${drawer.name} வரைகிறார்!` });
+
+    this._startTimer();
   }
 
-  startTimer() {
+  _startTimer() {
     clearInterval(this.timer);
     this.timer = setInterval(() => {
       this.state.timeLeft = Math.max(0, this.state.timeLeft - 1);
 
-      // Update hint chars based on time
-      if (this.state.currentWord) {
-        this.state.hintChars = generateHint(
-          this.state.currentWord.tamil,
-          this.state.timeLeft,
-          this.state.drawTime
-        );
+      // Update static hints
+      if (this.state.hintMeta) {
+        const { chars, revealOrder, thresholds } = this.state.hintMeta;
+        this.state.hintChars = applyHints(chars, revealOrder, thresholds, this.state.timeLeft);
       }
 
-      // Broadcast timer + hint update (lightweight)
-      broadcast({
-        type: 'TIMER_TICK',
-        timeLeft: this.state.timeLeft,
-        hintChars: this.state.hintChars,
-      });
+      // Lightweight tick — don't call _broadcastState() which sends full state every second
+      const tick = { type:'TIMER_TICK', timeLeft:this.state.timeLeft, hintChars:this.state.hintChars };
+      broadcast(tick);
+      // Update host React state directly (avoids stale-state overwrite loop)
+      this.onStateUpdate({ timeLeft:this.state.timeLeft, hintChars:this.state.hintChars });
 
-      if (this.state.timeLeft <= 0) {
-        this.endRound(false);
-      }
+      if (this.state.timeLeft <= 0) this._endRound(false);
     }, 1000);
   }
+
+  // ─── Guess handling ─────────────────────────────────────────────
 
   handleGuess(peerId, text) {
     if (this.state.phase !== 'drawing') return;
     const player = this.state.players[peerId];
     if (!player || player.isDrawing || player.hasGuessed) return;
 
-    const { isMatch, confidence } = checkGuess(text, this.state.currentWord);
+    const { isMatch, isClose, confidence } = checkGuess(text, this.state.currentWord);
 
     if (isMatch) {
-      const points = calculatePoints(confidence, this.state.timeLeft, this.state.drawTime);
-
-      // Award guesser
-      player.score += points;
+      const pts = calculatePoints(confidence, this.state.timeLeft, this.state.drawTime);
+      player.score    += pts;
       player.hasGuessed = true;
       this.state.guessedPeers.add(peerId);
 
-      // Award drawer too
+      // Drawer also earns points when someone guesses
       const drawer = Object.values(this.state.players).find(p => p.isDrawing);
       if (drawer) drawer.score += 15;
 
+      broadcast({ type:'CORRECT_GUESS', playerId:peerId, playerName:player.name, points:pts, color:player.color });
+      this._addMsg({ type:'correct', playerId:peerId, playerName:player.name, text:`${player.name} கண்டுபிடித்தார்! +${pts}` });
+      this._broadcastState();
+      this._checkAllGuessed();
+
+    } else if (isClose) {
+      // Private "almost" message to that player only
+      sendTo(peerId, { type:'CLOSE_GUESS', text });
+      // Show in public chat as a close attempt (with flame indicator)
       broadcast({
-        type: 'CORRECT_GUESS',
-        playerId: peerId,
-        playerName: player.name,
-        points,
-        color: player.color,
+        type:'WRONG_GUESS', playerId:peerId, playerName:player.name,
+        text, isClose:true, color:player.color,
       });
 
-      this.addMessage({
-        type: 'correct',
-        playerId: peerId,
-        playerName: player.name,
-        text: `${player.name} கண்டுபிடித்தார்! +${points}`,
-      });
-
-      this.broadcastState();
-      this.checkAllGuessed();
     } else {
-      // Show wrong guess in chat (visible to all)
       broadcast({
-        type: 'WRONG_GUESS',
-        playerId: peerId,
-        playerName: player.name,
-        text,
-        color: player.color,
+        type:'WRONG_GUESS', playerId:peerId, playerName:player.name,
+        text, isClose:false, color:player.color,
       });
     }
   }
 
+  // ─── Drawing relay ──────────────────────────────────────────────
+
   handleDrawStroke(fromPeerId, strokeData) {
-    // Relay drawing data to all non-drawers
-    broadcast({ type: 'DRAW_STROKE', stroke: strokeData }, fromPeerId);
+    // Only relay if sender is the actual drawer
+    const p = this.state.players[fromPeerId];
+    if (!p?.isDrawing) return;
+    broadcast({ type:'DRAW_STROKE', stroke:strokeData }, fromPeerId);
   }
 
   handleClearCanvas(fromPeerId) {
-    broadcast({ type: 'DRAW_CLEAR' }, fromPeerId);
+    const p = this.state.players[fromPeerId];
+    if (!p?.isDrawing) return;
+    broadcast({ type:'DRAW_CLEAR' }, fromPeerId);
   }
 
-  checkAllGuessed() {
+  // ─── Round / Game end ──────────────────────────────────────────
+
+  _checkAllGuessed() {
     const nonDrawers = Object.values(this.state.players).filter(p => !p.isDrawing);
     if (nonDrawers.length > 0 && nonDrawers.every(p => p.hasGuessed)) {
-      this.endRound(false);
+      this._endRound(false);
     }
   }
 
-  endRound(drawerLeft = false) {
+  _endRound(drawerLeft = false) {
     clearInterval(this.timer);
     clearTimeout(this._wordChoiceTimeout);
     this.state.phase = 'roundEnd';
 
     const word = this.state.currentWord;
     broadcast({
-      type: 'ROUND_END',
-      word: word ? { tamil: word.tamil, english: word.english } : null,
+      type:'ROUND_END',
+      word: word ? { tamil:word.tamil, english:word.english } : null,
       drawerLeft,
-      scores: this.getScores(),
     });
 
-    if (word) {
-      this.addMessage({
-        type: 'system',
-        text: `சொல்: ${word.tamil} (${word.english})`,
-      });
-    }
+    if (word) this._addMsg({ type:'system', text:`சொல்: ${word.tamil} (${word.english})` });
 
-    // Wait 5 seconds then next round
+    // Push roundEnd state to host UI immediately
+    this.onStateUpdate({
+      phase: 'roundEnd',
+      roundEndWord: word ? { tamil:word.tamil, english:word.english } : null,
+    });
+
+    // After 5 s, advance to next turn or end game
     setTimeout(() => {
-      const playerIds = Object.keys(this.state.players);
+      const pids = Object.keys(this.state.players);
       this.state.drawerIndex++;
 
-      if (this.state.drawerIndex >= playerIds.length) {
+      // All players drew → complete one round
+      if (this.state.drawerIndex >= this.state.drawerQueue.length) {
         this.state.drawerIndex = 0;
         this.state.round++;
       }
 
-      if (this.state.round > this.state.maxRounds || playerIds.length < 2) {
-        this.endGame();
+      if (this.state.round > this.state.maxRounds || pids.length < 2) {
+        this._endGame();
       } else {
-        this.state.phase = 'drawing';
-        this.startRound();
+        this._startRound();
       }
     }, 5000);
   }
 
-  endGame() {
+  _endGame() {
     clearInterval(this.timer);
     this.state.phase = 'gameEnd';
-    const scores = this.getScores();
-    broadcast({ type: 'GAME_END', scores });
-    this.broadcastState();
+    broadcast({ type:'GAME_END', scores:this._scores() });
+    this._broadcastState();
   }
 
-  // ─── Helpers ───────────────────────────────────────────────────
+  // ─── Helpers ────────────────────────────────────────────────────
 
-  addMessage(msg) {
-    const message = { ...msg, id: Date.now() + Math.random(), timestamp: Date.now() };
-    this.state.messages = [...this.state.messages.slice(-49), message];
-    broadcast({ type: 'CHAT_MESSAGE', message });
-    // Also update host locally
-    this.onStateUpdate({ messages: this.state.messages });
+  _addMsg(msg) {
+    const m = { ...msg, id: Date.now() + Math.random(), timestamp: Date.now() };
+    this.state.messages = [...this.state.messages.slice(-49), m];
+    broadcast({ type:'CHAT_MESSAGE', message:m });
+    this.onStateUpdate({ messages:this.state.messages });
   }
 
-  getScores() {
+  _scores() {
     return Object.values(this.state.players)
-      .map(p => ({ id: p.id, name: p.name, score: p.score, color: p.color }))
-      .sort((a, b) => b.score - a.score);
+      .map(p => ({ id:p.id, name:p.name, score:p.score, color:p.color }))
+      .sort((a,b) => b.score - a.score);
   }
 
-  /**
-   * Get state safe to broadcast (no current word)
-   * @param {string|null} forPeerId - if specified, may include extra info
-   */
-  getPublicState(forPeerId = null) {
+  _publicState() {
     const drawer = Object.values(this.state.players).find(p => p.isDrawing);
     return {
-      phase: this.state.phase,
-      players: Object.values(this.state.players).map(p => ({
-        id: p.id,
-        name: p.name,
-        score: p.score,
-        isDrawing: p.isDrawing,
-        hasGuessed: p.hasGuessed,
-        color: p.color,
+      phase:        this.state.phase,
+      players:      Object.values(this.state.players).map(p => ({
+        id:p.id, name:p.name, score:p.score,
+        isDrawing:p.isDrawing, hasGuessed:p.hasGuessed, color:p.color,
       })),
-      round: this.state.round,
-      maxRounds: this.state.maxRounds,
-      drawTime: this.state.drawTime,
-      timeLeft: this.state.timeLeft,
-      drawerPeerId: drawer?.id ?? null,
-      drawerName: drawer?.name ?? null,
-      wordLength: this.state.currentWord?.tamil ? [...this.state.currentWord.tamil].length : 0,
-      wordEnglishLength: this.state.currentWord?.english?.length ?? 0,
-      hintChars: this.state.hintChars,
-      messages: this.state.messages,
-      // Never reveal currentWord to clients
+      round:        this.state.round,
+      maxRounds:    this.state.maxRounds,
+      drawTime:     this.state.drawTime,
+      timeLeft:     this.state.timeLeft,
+      drawerPeerId: drawer?.id  ?? null,
+      drawerName:   drawer?.name ?? null,
+      wordLength:   this.state.hintMeta?.chars.length ?? 0,
+      hintChars:    this.state.hintChars,
+      messages:     this.state.messages,
+      // NOTE: currentWord is NEVER sent to clients
     };
   }
 
-  broadcastState() {
-    const publicState = this.getPublicState();
-    broadcast({ type: 'STATE', state: publicState });
-    this.onStateUpdate(publicState);
+  _broadcastState() {
+    const s = this._publicState();
+    broadcast({ type:'STATE', state:s });
+    this.onStateUpdate(s);
   }
 
   destroy() {

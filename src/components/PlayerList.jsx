@@ -4,57 +4,51 @@ const AVATARS = ['🦁','🐯','🦊','🐼','🐨','🦄','🐸','🦋','🦅',
 
 export default function PlayerList() {
   const { players, myId, drawerPeerId } = useGame();
-  const sorted = [...players].sort((a, b) => b.score - a.score);
-  const maxScore = Math.max(...players.map(p => p.score), 1);
+  const sorted = [...players].sort((a,b) => b.score - a.score);
+  const maxScore = Math.max(...players.map(p=>p.score), 1);
 
   return (
-    <div className="card p-3 h-full overflow-y-auto">
-      <h3 className="font-bold text-sm mb-3 flex items-center gap-1"
-          style={{ color: 'var(--text-accent)', fontFamily: "'Noto Sans Tamil', serif" }}>
+    <div className="card p-3 flex flex-col gap-2 overflow-y-auto" style={{ flex: 1 }}>
+      <h3 className="font-bold text-xs tracking-wide mb-1"
+          style={{ color: 'var(--text-muted)', fontFamily:"'Noto Sans Tamil',sans-serif" }}>
         🏆 மதிப்பெண்
       </h3>
-      <div className="space-y-2">
-        {sorted.map((player, i) => (
-          <PlayerRow key={player.id} player={player} rank={i}
-            isMe={player.id === myId} isDrawing={player.id === drawerPeerId}
-            maxScore={maxScore}
-            emoji={AVATARS[players.findIndex(p => p.id === player.id) % AVATARS.length]} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function PlayerRow({ player, rank, isMe, isDrawing, maxScore, emoji }) {
-  const pct = maxScore > 0 ? (player.score / maxScore) * 100 : 0;
-  return (
-    <div className="rounded-xl p-2.5 transition-all"
-         style={{
-           background: isMe ? 'var(--bg-card2)' : 'transparent',
-           border: isMe ? '1px solid var(--border-accent)' : '1px solid transparent',
-           outline: isDrawing ? '1px solid rgba(232,184,75,0.4)' : 'none'
-         }}>
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-xs w-5 text-center" style={{ color: 'var(--text-faint)' }}>
-          {rank === 0 ? '🥇' : rank === 1 ? '🥈' : rank === 2 ? '🥉' : `${rank+1}.`}
-        </span>
-        <span className="text-base">{emoji}</span>
-        <span className="font-semibold text-sm flex-1 truncate"
-              style={{ color: player.color, fontFamily: "'Noto Sans Tamil', serif" }}>
-          {player.name}
-          {isMe && <span className="text-xs ml-1" style={{ color: 'var(--text-accent)' }}>(நீங்கள்)</span>}
-        </span>
-        <div className="flex items-center gap-1">
-          {isDrawing && <span title="Drawing" className="text-xs">✏️</span>}
-          {player.hasGuessed && !isDrawing && <span title="Guessed" className="text-xs">✅</span>}
-        </div>
-        <span className="font-bold text-sm tabular-nums" style={{ color: 'var(--text-primary)' }}>
-          {player.score}
-        </span>
-      </div>
-      <div className="timer-bar-track">
-        <div className="score-bar-fill" style={{ width: `${pct}%`, background: player.color }} />
-      </div>
+      {sorted.map((player, i) => {
+        const pct = maxScore > 0 ? (player.score / maxScore) * 100 : 0;
+        const isMe      = player.id === myId;
+        const isDrawing = player.id === drawerPeerId;
+        const emoji = AVATARS[players.findIndex(p=>p.id===player.id) % AVATARS.length];
+        return (
+          <div key={player.id} className="rounded-xl p-2"
+               style={{
+                 background: isMe ? 'var(--bg-card2)' : 'transparent',
+                 border: isMe ? '1px solid var(--border-accent)' : '1px solid transparent',
+                 outline: isDrawing ? `2px solid ${player.color}44` : 'none',
+               }}>
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className="text-xs w-5 text-center">
+                {i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`}
+              </span>
+              <span className="text-sm">{emoji}</span>
+              <span className="font-semibold text-xs flex-1 truncate"
+                    style={{ color: player.color, fontFamily:"'Noto Sans Tamil',sans-serif" }}>
+                {player.name}
+                {isMe && <span className="ml-1 text-xs" style={{ color:'var(--text-accent)' }}>(நீ)</span>}
+              </span>
+              <div className="flex gap-0.5">
+                {isDrawing && <span title="Drawing" style={{ fontSize:11 }}>✏️</span>}
+                {player.hasGuessed && !isDrawing && <span title="Guessed" style={{ fontSize:11 }}>✅</span>}
+              </div>
+              <span className="font-black text-sm tabular-nums" style={{ color:'var(--text-primary)' }}>
+                {player.score}
+              </span>
+            </div>
+            <div className="timer-bar-track">
+              <div className="score-bar-fill" style={{ width:`${pct}%`, background: player.color }} />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

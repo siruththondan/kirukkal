@@ -12,7 +12,7 @@ import react from '@vitejs/plugin-react'
 // ─────────────────────────────────────────────────────────────
 
 const isCodespace = process.env.CODESPACE_NAME != null;
-const basePath    = process.env.VITE_BASE_PATH ?? (isCodespace ? '/' : '/tamil-scribble/');
+const basePath    = process.env.VITE_BASE_PATH ?? (isCodespace ? '/' : '/kirukkal/');
 
 export default defineConfig({
   plugins: [react()],

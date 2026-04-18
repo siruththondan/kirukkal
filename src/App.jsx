@@ -7,13 +7,16 @@ import Game from './components/Game';
 function AppInner() {
   const { appPhase, error, resetGame } = useGame();
   return (
-    <div className="min-h-screen" style={{ background: 'var(--bg-root)', color: 'var(--text-primary)', transition: 'background 0.4s, color 0.4s' }}>
+    <div style={{ minHeight:'100vh', background:'var(--bg-root)', color:'var(--text-primary)', transition:'background 0.3s,color 0.3s' }}>
       {error && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 text-white px-6 py-3 rounded-xl backdrop-blur-sm flex items-center gap-3 animate-bounce-in"
-             style={{ background: 'rgba(127,29,29,0.95)', border: '1px solid var(--red)' }}>
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-xl animate-bounce-in"
+             style={{ background:'var(--bg-card)', border:'1px solid var(--red)', boxShadow:'0 4px 20px rgba(0,0,0,0.15)' }}>
           <span>⚠️</span>
-          <span style={{ fontFamily: "'Noto Sans Tamil', serif" }}>{error}</span>
-          <button onClick={resetGame} className="ml-2 underline text-sm" style={{ color: 'var(--red)' }}>Home</button>
+          <span style={{ fontFamily:"'Noto Sans Tamil',sans-serif", color:'var(--text-primary)', fontSize:14 }}>{error}</span>
+          <button onClick={resetGame}
+            style={{ color:'var(--red)', background:'none', border:'none', cursor:'pointer', fontSize:13, textDecoration:'underline' }}>
+            Home
+          </button>
         </div>
       )}
       {appPhase === 'home'  && <Home />}
