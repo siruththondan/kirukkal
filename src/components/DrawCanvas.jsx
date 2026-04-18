@@ -8,18 +8,43 @@ const PALETTE = [
 ];
 const SIZES = [3, 7, 13, 22];
 
-export default function DrawCanvas() {
+export default function DrawCanvas({ phase }) {
   const canvasRef    = useRef(null);
   const drawingRef   = useRef(false);
   const lastRef      = useRef(null);
   const [color, setColor] = useState('#000000');
   const [size,  setSize]  = useState(7);
-  const [tool,  setTool]  = useState('pen'); // pen | eraser | fill
+  const [tool,  setTool]  = useState('pen');
 
   const { sendStroke, sendClearCanvas, subscribeToStrokes, subscribeToClear, amDrawing } = useGame();
 
-  // ── Canvas helpers ─────────────────────────────────────────────
+  // Resize canvas to fit container
+  const resizeCanvas = useCallback(() => {
+    const cv = canvasRef.current;
+    if (!cv || !cv.parentElement) return;
+    
+    const rect = cv.parentElement.getBoundingClientRect();
+    cv.width = Math.max(1, Math.floor(rect.width));
+    cv.height = Math.max(1, Math.floor(rect.height));
+    
+    // Clear on resize
+    const ctx = cv.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, cv.width, cv.height);
+    }
+  }, []);
 
+  // Set up canvas resize listener
+  useEffect(() => {
+    // Initial resize
+    setTimeout(() => resizeCanvas(), 100);
+    
+    window.addEventListener('resize', resizeCanvas);
+    return () => window.removeEventListener('resize', resizeCanvas);
+  }, [resizeCanvas]);
+
+  // Canvas helpers
   const getPos = (e, canvas) => {
     const r  = canvas.getBoundingClientRect();
     const sx = canvas.width  / r.width;
@@ -42,9 +67,13 @@ export default function DrawCanvas() {
   };
 
   const clearCanvas = useCallback(() => {
-    const cv = canvasRef.current; if (!cv) return;
+    const cv = canvasRef.current; 
+    if (!cv) return;
     const ctx = cv.getContext('2d');
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
+    if (ctx) {
+      ctx.fillStyle = '#ffffff'; 
+      ctx.fillRect(0, 0, cv.width, cv.height);
+    }
   }, []);
 
   const floodFill = (ctx, cv, sx, sy, hex) => {
@@ -71,13 +100,16 @@ export default function DrawCanvas() {
     ctx.putImageData(data, 0, 0);
   };
 
-  // ── Pointer events (drawer only) ───────────────────────────────
-
+  // Pointer events (drawer only)
   const onDown = useCallback((e) => {
     if (!amDrawing) return;
     e.preventDefault();
     const cv = canvasRef.current;
+    if (!cv) return;
+    
     const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    
     const pos = getPos(e, cv);
 
     if (tool === 'fill') {
@@ -98,9 +130,15 @@ export default function DrawCanvas() {
     if (!drawingRef.current || !amDrawing || tool==='fill') return;
     e.preventDefault();
     const cv  = canvasRef.current;
+    if (!cv) return;
+    
     const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    
     const pos = getPos(e, cv);
     const from = lastRef.current;
+    if (!from) return;
+    
     const sc = tool==='eraser' ? '#ffffff' : color;
     const sw = tool==='eraser' ? size*3 : size;
     drawSeg(ctx, from, pos, sc, sw);
@@ -112,12 +150,15 @@ export default function DrawCanvas() {
 
   const handleClear = () => { clearCanvas(); sendClearCanvas(); };
 
-  // ── Receive remote strokes ─────────────────────────────────────
-
+  // Receive remote strokes
   useEffect(() => {
     const unsub = subscribeToStrokes((raw) => {
-      const cv  = canvasRef.current; if (!cv) return;
+      const cv  = canvasRef.current; 
+      if (!cv) return;
+      
       const ctx = cv.getContext('2d');
+      if (!ctx) return;
+      
       const list = Array.isArray(raw) ? raw : [raw];
       list.forEach(s => {
         if (!s) return;
@@ -140,46 +181,48 @@ export default function DrawCanvas() {
     return unsub;
   }, [subscribeToClear, clearCanvas]);
 
-  useEffect(() => { clearCanvas(); }, [clearCanvas]);
-
   const cursor = !amDrawing ? '' : tool==='eraser' ? 'canvas-eraser' : 'canvas-pen';
 
   return (
-    <div className="flex flex-col gap-2 w-full">
-      {/* Canvas */}
-      <div className="canvas-wrapper">
+    <div className="flex flex-col gap-2 w-full h-full min-h-0 max-w-full">
+      {/* Canvas Container - Responsive */}
+      <div className="flex-1 min-h-0 rounded-lg overflow-hidden border border-solid"
+           style={{ borderColor: 'var(--border)' }}>
         <canvas
           ref={canvasRef}
-          width={900} height={560}
+          width={800}
+          height={600}
           className={cursor}
+          style={{ width: '100%', height: '100%', display: 'block' }}
           onPointerDown={onDown}
           onPointerMove={onMove}
           onPointerUp={onUp}
           onPointerLeave={onUp}
+          onTouchStart={e => e.preventDefault()}
         />
       </div>
 
       {/* Toolbar — drawer only */}
       {amDrawing && (
-        <div className="card p-3 flex flex-wrap items-center gap-3">
+        <div className="card p-2 md:p-3 flex flex-wrap items-center gap-2">
           {/* Colors */}
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-1">
             {PALETTE.map(c => (
               <button key={c} onClick={() => { setColor(c); setTool('pen'); }}
                 style={{
-                  width:26, height:26, borderRadius:'50%', background:c,
+                  width:24, height:24, borderRadius:'50%', background:c,
                   border:'none', cursor:'pointer', flexShrink:0,
-                  outline: color===c && tool==='pen' ? '3px solid var(--accent)' : c==='#ffffff' ? '1px solid #ccc' : 'none',
-                  outlineOffset:2,
+                  outline: color===c && tool==='pen' ? '2px solid var(--accent)' : c==='#ffffff' ? '1px solid #ccc' : 'none',
+                  outlineOffset:1,
                   transition:'outline 0.1s',
                 }} />
             ))}
           </div>
 
-          <div style={{ width:1, height:28, background:'var(--border)' }} />
+          <div style={{ width:1, height:24, background:'var(--border)' }} />
 
           {/* Sizes */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             {SIZES.map(s => (
               <button key={s} onClick={() => { setSize(s); setTool('pen'); }}
                 style={{
@@ -190,14 +233,14 @@ export default function DrawCanvas() {
             ))}
           </div>
 
-          <div style={{ width:1, height:28, background:'var(--border)' }} />
+          <div style={{ width:1, height:24, background:'var(--border)' }} />
 
           {/* Tools */}
-          <div className="flex gap-1.5">
+          <div className="flex gap-1">
             {[{ t:'fill',icon:'🪣' },{ t:'eraser',icon:'🧹' }].map(({t,icon})=>(
               <button key={t} onClick={()=>setTool(t)}
                 style={{
-                  padding:'5px 10px', borderRadius:8, fontSize:14,
+                  padding:'5px 10px', borderRadius:6, fontSize:14,
                   background: tool===t ? 'var(--btn-primary-bg)' : 'var(--bg-card2)',
                   color: tool===t ? '#fff' : 'var(--text-muted)',
                   border:'none', cursor:'pointer',
@@ -206,7 +249,7 @@ export default function DrawCanvas() {
               </button>
             ))}
             <button onClick={handleClear}
-              style={{ padding:'5px 10px', borderRadius:8, fontSize:14,
+              style={{ padding:'5px 10px', borderRadius:6, fontSize:14,
                 background:'rgba(239,68,68,0.1)', color:'var(--red)',
                 border:'none', cursor:'pointer' }}>
               🗑️
@@ -215,8 +258,8 @@ export default function DrawCanvas() {
         </div>
       )}
 
-      {!amDrawing && (
-        <p className="text-center text-sm py-1"
+      {!amDrawing && phase === 'drawing' && (
+        <p className="text-center text-xs md:text-sm py-1"
            style={{ color:'var(--text-faint)', fontFamily:"'Noto Sans Tamil',sans-serif" }}>
           👁️ கவனியுங்கள் மற்றும் யூகியுங்கள்!
         </p>

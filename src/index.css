@@ -319,3 +319,169 @@ body {
 .delay-3 { animation-delay: 0.21s; }
 
 @keyframes confFall { to { transform:translateY(110vh) rotate(720deg); opacity:0; } }
+
+/* ══════════════════════════════════════════════════════
+   TIMER BAR ANIMATIONS
+   ══════════════════════════════════════════════════════ */
+
+.timer-bar-track {
+  width: 100%;
+  height: 24px;
+  background: var(--bg-card2);
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.timer-bar-fill {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent));
+  box-shadow: 0 0 8px var(--accent);
+  transition: width 0.2s ease-out;
+  will-change: width;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes slideIn {
+  from { transform: translateX(-10px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* ══════════════════════════════════════════════════════
+   MOBILE RESPONSIVE CANVAS
+   ══════════════════════════════════════════════════════ */
+
+canvas {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.canvas-pen {
+  cursor: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="black" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z"/><path fill="black" d="M20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>') 12 12, auto;
+}
+
+.canvas-eraser {
+  cursor: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="black" d="M16.54 11L19.7 7.85c.79-.79.79-2.05 0-2.84L17 2.3c-.79-.79-2.05-.79-2.84 0L11 5.46 5.46 11 11 16.54 16.54 11zM5 18h10v2H5z"/></svg>') 12 12, auto;
+}
+
+/* ══════════════════════════════════════════════════════
+   SCROLLABLE CHAT AREA
+   ══════════════════════════════════════════════════════ */
+
+.chat-message {
+  animation: slideIn 0.2s ease-out;
+  word-break: break-word;
+}
+
+/* Custom scrollbar for chat */
+div::-webkit-scrollbar {
+  width: 6px;
+}
+
+div::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+div::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+div::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover);
+}
+
+/* ══════════════════════════════════════════════════════
+   UTILITY CLASSES
+   ══════════════════════════════════════════════════════ */
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  border-color: var(--border-hover);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 6px 20px rgba(0,0,0,0.08);
+}
+
+.card-hover {
+  transition: all 0.15s ease;
+}
+
+.card-hover:hover {
+  background: var(--bg-card2);
+  border-color: var(--border-accent);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.input-field {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.95rem;
+  transition: all 0.2s ease;
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.btn-primary {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--btn-primary-bg);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: var(--shadow-card);
+}
+
+.btn-primary:hover:not(:disabled) {
+  box-shadow: var(--btn-primary-hover);
+  transform: translateY(-1px);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ══════════════════════════════════════════════════════
+   RESPONSIVE FIXES
+   ══════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  body { font-size: 14px; }
+  
+  .card { border-radius: 8px; }
+  
+  canvas {
+    max-width: 100%;
+    max-height: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  body { font-size: 13px; }
+  
+  .card { padding: 8px 12px !important; }
+}

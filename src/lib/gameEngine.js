@@ -1,8 +1,5 @@
 /**
  * gameEngine.js — Host-only game state machine
- *
- * Runs ONLY in the host's browser tab.
- * Communicates with clients via peerManager broadcast/sendTo.
  */
 
 import { broadcast, sendTo, getMyId } from './peerManager';
@@ -10,11 +7,6 @@ import { checkGuess, calculatePoints, buildStaticHints, applyHints } from './fuz
 import { getRandomWords } from './words';
 
 export class GameEngine {
-  /**
-   * @param {function} onStateUpdate  - partial React state update for host UI
-   * @param {function} onHostWord     - (word|null, choices|null) called when host is drawer
-   * @param {function} onClearCanvas  - called to wipe host's own canvas
-   */
   constructor(onStateUpdate, onHostWord, onClearCanvas) {
     this.onStateUpdate  = onStateUpdate;
     this.onHostWord     = onHostWord;
@@ -24,8 +16,8 @@ export class GameEngine {
 
     this.state = {
       phase:        'lobby',
-      players:      {},      // { peerId: PlayerObj }
-      drawerQueue:  [],      // ordered peer IDs for turns
+      players:      {},
+      drawerQueue:  [],
       drawerIndex:  0,
       round:        1,
       maxRounds:    3,
@@ -33,15 +25,13 @@ export class GameEngine {
       timeLeft:     80,
       currentWord:  null,
       hintChars:    [],
-      hintMeta:     null,   // { chars, revealOrder, thresholds }
+      hintMeta:     null,
       guessedPeers: new Set(),
       messages:     [],
       wordChoices:  [],
       category:     'all',
     };
   }
-
-  // ─── Player management ────────────────────────────────────────
 
   addPlayer(peerId, name) {
     const palette = ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6','#ec4899','#14b8a6'];
@@ -54,7 +44,6 @@ export class GameEngine {
       color, joinedAt: Date.now(),
     };
 
-    // Send full current state to the new joiner (they just connected)
     if (peerId !== getMyId()) {
       sendTo(peerId, { type: 'STATE', state: this._publicState() });
     }
@@ -68,6 +57,15 @@ export class GameEngine {
     delete this.state.players[peerId];
     this._addMsg({ type:'system', text:`${p.name} விளையாட்டை விட்டு சென்றார்` });
 
+    const playerIds = Object.keys(this.state.players);
+    
+    // If only 1 or 0 players left, end game
+    if (playerIds.length <= 1) {
+      this._endGame();
+      return;
+    }
+
+    // If drawer left, end round early
     if (p.isDrawing && this.state.phase === 'drawing') {
       this._endRound(true);
     } else {
@@ -75,8 +73,6 @@ export class GameEngine {
       this._broadcastState();
     }
   }
-
-  // ─── Game flow ─────────────────────────────────────────────────
 
   startGame(settings) {
     this.state.maxRounds   = Math.max(1, Math.min(10, settings.rounds   || 3));
@@ -94,8 +90,8 @@ export class GameEngine {
 
   _difficultyForRound() {
     if (this.state.round === 1) return 'easy';
-    if (this.state.round === 2) return 'medium'; // easy+medium pool
-    return null; // all difficulties
+    if (this.state.round === 2) return 'medium';
+    return null;
   }
 
   _startRound() {
@@ -103,15 +99,16 @@ export class GameEngine {
     clearTimeout(this._wordChoiceTimeout);
 
     const pids = Object.keys(this.state.players);
-    if (pids.length < 2) { this._endGame(); return; }
+    if (pids.length < 2) { 
+      this._endGame(); 
+      return; 
+    }
 
-    // Pick drawer
     const queue    = this.state.drawerQueue;
     const drawerId = queue[this.state.drawerIndex % queue.length];
     const drawer   = this.state.players[drawerId];
     if (!drawer) { this.state.drawerIndex++; this._startRound(); return; }
 
-    // Reset per-turn state
     Object.values(this.state.players).forEach(p => {
       p.isDrawing  = (p.id === drawerId);
       p.hasGuessed = false;
@@ -123,28 +120,22 @@ export class GameEngine {
     this.state.currentWord  = null;
     this.state.phase        = 'choosing';
 
-    // Clear canvas for everyone
     broadcast({ type:'DRAW_CLEAR' });
     this.onClearCanvas?.();
 
-    // Pick word choices (difficulty scales by round)
     const diff    = this._difficultyForRound();
     const choices = getRandomWords(this.state.category, 3, diff);
     this.state.wordChoices = choices;
 
-    // Broadcast choosing state
     this._broadcastState();
     this._addMsg({ type:'system', text:`✏️ ${drawer.name} சொல்லை தேர்ந்தெடுக்கிறார்...` });
 
-    // Deliver word choices
     if (drawerId === getMyId()) {
-      // Host is drawing — set React state directly
       this.onHostWord?.(null, choices);
     } else {
       sendTo(drawerId, { type:'WORD_CHOICES', choices });
     }
 
-    // Auto-pick after 15 s if drawer doesn't choose
     this._wordChoiceTimeout = setTimeout(() => {
       if (this.state.phase === 'choosing') {
         this.drawerPickedWord(drawerId, choices[0]);
@@ -163,17 +154,14 @@ export class GameEngine {
     this.state.phase        = 'drawing';
     this.state.timeLeft     = this.state.drawTime;
 
-    // Build static hints (deterministic, same for all clients)
     const meta = buildStaticHints(word.tamil, this.state.drawTime);
     this.state.hintMeta  = meta;
     this.state.hintChars = meta.chars.map(() => '_');
 
-    // Tell host their word if they are drawing
     if (drawerId === getMyId()) {
       this.onHostWord?.(word, null);
     }
 
-    // Tell all clients: round started, word length, initial blank hints
     broadcast({
       type:       'ROUND_START',
       drawerId,
@@ -193,23 +181,18 @@ export class GameEngine {
     this.timer = setInterval(() => {
       this.state.timeLeft = Math.max(0, this.state.timeLeft - 1);
 
-      // Update static hints
       if (this.state.hintMeta) {
         const { chars, revealOrder, thresholds } = this.state.hintMeta;
         this.state.hintChars = applyHints(chars, revealOrder, thresholds, this.state.timeLeft);
       }
 
-      // Lightweight tick — don't call _broadcastState() which sends full state every second
       const tick = { type:'TIMER_TICK', timeLeft:this.state.timeLeft, hintChars:this.state.hintChars };
       broadcast(tick);
-      // Update host React state directly (avoids stale-state overwrite loop)
       this.onStateUpdate({ timeLeft:this.state.timeLeft, hintChars:this.state.hintChars });
 
       if (this.state.timeLeft <= 0) this._endRound(false);
     }, 1000);
   }
-
-  // ─── Guess handling ─────────────────────────────────────────────
 
   handleGuess(peerId, text) {
     if (this.state.phase !== 'drawing') return;
@@ -224,7 +207,6 @@ export class GameEngine {
       player.hasGuessed = true;
       this.state.guessedPeers.add(peerId);
 
-      // Drawer also earns points when someone guesses
       const drawer = Object.values(this.state.players).find(p => p.isDrawing);
       if (drawer) drawer.score += 15;
 
@@ -234,9 +216,7 @@ export class GameEngine {
       this._checkAllGuessed();
 
     } else if (isClose) {
-      // Private "almost" message to that player only
       sendTo(peerId, { type:'CLOSE_GUESS', text });
-      // Show in public chat as a close attempt (with flame indicator)
       broadcast({
         type:'WRONG_GUESS', playerId:peerId, playerName:player.name,
         text, isClose:true, color:player.color,
@@ -250,10 +230,7 @@ export class GameEngine {
     }
   }
 
-  // ─── Drawing relay ──────────────────────────────────────────────
-
   handleDrawStroke(fromPeerId, strokeData) {
-    // Only relay if sender is the actual drawer
     const p = this.state.players[fromPeerId];
     if (!p?.isDrawing) return;
     broadcast({ type:'DRAW_STROKE', stroke:strokeData }, fromPeerId);
@@ -264,8 +241,6 @@ export class GameEngine {
     if (!p?.isDrawing) return;
     broadcast({ type:'DRAW_CLEAR' }, fromPeerId);
   }
-
-  // ─── Round / Game end ──────────────────────────────────────────
 
   _checkAllGuessed() {
     const nonDrawers = Object.values(this.state.players).filter(p => !p.isDrawing);
@@ -288,18 +263,15 @@ export class GameEngine {
 
     if (word) this._addMsg({ type:'system', text:`சொல்: ${word.tamil} (${word.english})` });
 
-    // Push roundEnd state to host UI immediately
     this.onStateUpdate({
       phase: 'roundEnd',
       roundEndWord: word ? { tamil:word.tamil, english:word.english } : null,
     });
 
-    // After 5 s, advance to next turn or end game
     setTimeout(() => {
       const pids = Object.keys(this.state.players);
       this.state.drawerIndex++;
 
-      // All players drew → complete one round
       if (this.state.drawerIndex >= this.state.drawerQueue.length) {
         this.state.drawerIndex = 0;
         this.state.round++;
@@ -319,8 +291,6 @@ export class GameEngine {
     broadcast({ type:'GAME_END', scores:this._scores() });
     this._broadcastState();
   }
-
-  // ─── Helpers ────────────────────────────────────────────────────
 
   _addMsg(msg) {
     const m = { ...msg, id: Date.now() + Math.random(), timestamp: Date.now() };
@@ -352,7 +322,6 @@ export class GameEngine {
       wordLength:   this.state.hintMeta?.chars.length ?? 0,
       hintChars:    this.state.hintChars,
       messages:     this.state.messages,
-      // NOTE: currentWord is NEVER sent to clients
     };
   }
 
