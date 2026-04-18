@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useGame } from '../context/GameContext';
 import ThemeSwitcher from './ThemeSwitcher';
 import { PalmLeaves, KolamCorner, OrnamentDivider } from './Decorations';
 import { useTheme } from '../context/ThemeContext';
+import { getEnvironmentWarning } from '../lib/peerManager';
 
 export default function Home() {
   const { createRoom, joinRoom, connecting } = useGame();
@@ -10,6 +11,11 @@ export default function Home() {
   const [tab, setTab] = useState('create');
   const [name, setName] = useState('');
   const [roomCode, setRoomCode] = useState('');
+  const [envWarning, setEnvWarning] = useState(null);
+
+  useEffect(() => {
+    setEnvWarning(getEnvironmentWarning());
+  }, []);
 
   const handleCreate = (e) => {
     e.preventDefault();
@@ -32,6 +38,17 @@ export default function Home() {
       <div className="fixed top-4 right-4 z-20">
         <ThemeSwitcher />
       </div>
+
+      {/* Codespace / environment warning */}
+      {envWarning && (
+        <div className="w-full max-w-md mb-4 animate-slide-up relative z-10">
+          <div className="rounded-xl px-4 py-3 text-sm flex gap-2"
+               style={{ background: 'rgba(234,179,8,0.12)', border: '1px solid rgba(234,179,8,0.4)', color: '#fbbf24', fontFamily: "'Noto Sans Tamil', serif" }}>
+            <span className="flex-shrink-0">⚠️</span>
+            <span>{envWarning}</span>
+          </div>
+        </div>
+      )}
 
       {/* Hero */}
       <div className="text-center mb-8 animate-bounce-in relative z-10">
@@ -101,12 +118,14 @@ export default function Home() {
                 placeholder="பெயர் உள்ளிடவும்..." maxLength={20}
                 className="input-field" required autoFocus />
             </Field>
-            <Field label="அறை குறியீடு" sub="Room code">
-              <input type="text" value={roomCode} onChange={e => setRoomCode(e.target.value)}
-                placeholder="Code ஒட்டவும்..."
-                className="input-field font-mono tracking-widest text-lg text-center" required />
+            <Field label="அறை குறியீடு" sub="Room code (e.g. k7mp2x)">
+              <input type="text" value={roomCode}
+                onChange={e => setRoomCode(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, ''))}
+                placeholder="6-letter code..."
+                className="input-field font-mono tracking-widest text-xl text-center"
+                maxLength={6} required />
             </Field>
-            <Btn loading={connecting} disabled={!name.trim() || !roomCode.trim()}>🎮 சேர்</Btn>
+            <Btn loading={connecting} disabled={!name.trim() || roomCode.length < 4}>🎮 சேர்</Btn>
           </form>
         )}
       </div>

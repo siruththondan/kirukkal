@@ -20,7 +20,7 @@
 
 const ALLOWED_ORIGINS = [
   'https://YOUR-USERNAME.github.io',  // ← Change this!
-  'https://laughing-eureka-x56rwrv66xjj3x5p-5173.app.github.dev/kirukkal/',             // dev
+  'https://laughing-eureka-x56rwrv66xjj3x5p-5173.app.github.dev/',             // dev
 ];
 
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
